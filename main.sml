@@ -1,31 +1,11 @@
 (* Evaluator for a Language (c) Nathan Burgers 2013 *)
 
-type symbol = string
-datatype atom = Number of int
-	      | String of string
-	      | Func of symbol
-datatype term = Atom of atom
-	      | MonadicApp of term * atom
-	      | DyadicApp of term * atom * term
 infix 4 @>
 datatype ('a, 'b) assoc = @> of 'a * 'b
 type 'b dict = (string, 'b) assoc list
 
-infix 9 $
-fun op$ f x = f x
-
 infix 2 o
 fun opo (f,g)= fn x => f (g x)
-
-val prelude : (real * real -> real) dict
-    = [ "*" @> op*
-      , "/" @> op/
-      ]
-
-type ('a, 'b) eval =
-     { env : 'a dict
-     , result : 'b
-     }
 
 fun id x : 'a = x
 fun fst (a,b) : 'a * 'b -> 'a = a
@@ -109,6 +89,63 @@ val quote = #"\""
 val notQuote = predicate (fn x => x <> quote)
 val string = literal quote *> many notQuote <* literal quote
 
-fun head nil = nil
-  | head (x::_) = x
+fun oneOf (x::nil) = literal x
+  | oneOf (x::xs) = literal x || oneOf xs
+val charIn = oneOf o String.explode
+
+val symbol = charIn "~`!@#$%^&*()-_=+[{]}\\|;:'\",<.>/?"
+
+
+
 fun parse f = f o String.explode
+
+		      (* Semantics *)
+infixr 4 <| |>
+datatype 'a stack = Bot
+		  | |> of 'a * ('a stack)
+
+type 'a combinator = 'a stack -> 'a stack
+	       
+datatype value = Number of real
+	       | String of string
+	       | Bool of bool
+	       | Quote of value combinator stack
+	       | Nil
+
+fun lift1 f (a|>bs) = (f a) |> bs
+fun lift2 f (a|>b|>cs) = (f a b) |> cs
+fun lift3 f (a|>b|>c|>ds) = (f a b c) |> ds
+
+fun lookup index ((key @> value)::nil) =
+    if index = key then value else raise Match
+  | lookup index ((key @> value)::dict) =
+    if index = key then value else lookup index dict
+
+fun dup Bot = Bot
+  | dup (x |> s) = x |> x |> s
+fun drop Bot = Bot
+  | drop (x |> s) = s
+
+fun liftArith f (Number x) (Number y) = Number (f x y)
+  | liftArith f _ _ = Nil
+val liftOp = lift2 o liftArith o curry
+
+val prelude : value combinator dict
+    = [ "*" @> liftOp op*
+      , "/" @> liftOp op/
+      , "+" @> liftOp op+
+      , "-" @> liftOp op-
+      , "dup" @> dup
+      , "drop" @> drop
+      ]
+
+type ('a, 'b) eval = 'b * ('a dict)
+fun compose f g x = f (g x)
+fun fold f (x::y::nil) = f x y
+  | fold f (x::xs) = f x (fold f xs)
+fun bind fs x = (fold compose fs) x
+
+fun eval fs x = bind (map (fn x => lookup x prelude) fs) x
+
+val test = eval ["*", "dup"] (Number 2.0 |> Bot)
+
